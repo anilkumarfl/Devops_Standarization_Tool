@@ -1,0 +1,114 @@
+{% set pn = project_name | replace('-', '_') %}
+# S3 — object storage with hardened defaults (aws provider ~> 6.0)
+resource "aws_s3_bucket" "{{ pn }}_data" {
+  bucket = "{{ project_name }}-${var.environment}-data"
+
+  # force_destroy only in non-prod to allow terraform destroy in dev/staging
+  force_destroy = var.environment != "prod"
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-data"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+# Block all public access — objects are accessed via pre-signed URLs or policies only
+resource "aws_s3_bucket_public_access_block" "{{ pn }}_data" {
+  bucket = aws_s3_bucket.{{ pn }}_data.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Versioning — enables recovery of overwritten/deleted objects
+resource "aws_s3_bucket_versioning" "{{ pn }}_data" {
+  bucket = aws_s3_bucket.{{ pn }}_data.id
+
+  versioning_configuration {
+    status = var.environment == "prod" ? "Enabled" : "Suspended"
+  }
+}
+
+# Server-side encryption — AES-256 default, CMK when KMS is in the stack
+resource "aws_s3_bucket_server_side_encryption_configuration" "{{ pn }}_data" {
+  bucket = aws_s3_bucket.{{ pn }}_data.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = try(aws_kms_key.main.arn, null) != null ? "aws:kms" : "AES256"
+      kms_master_key_id = try(aws_kms_key.main.arn, null)
+    }
+    bucket_key_enabled = true
+  }
+}
+
+# Lifecycle — transition non-current versions to cheaper storage tiers
+resource "aws_s3_bucket_lifecycle_configuration" "{{ pn }}_data" {
+  bucket = aws_s3_bucket.{{ pn }}_data.id
+
+  depends_on = [aws_s3_bucket_versioning.{{ pn }}_data]
+
+  rule {
+    id     = "transition-noncurrent"
+    status = "Enabled"
+
+    noncurrent_version_transition {
+      noncurrent_days = 30
+      storage_class   = "STANDARD_IA"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+  }
+
+  rule {
+    id     = "abort-incomplete-multipart"
+    status = "Enabled"
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+# Bucket policy — deny any requests not using TLS
+resource "aws_s3_bucket_policy" "{{ pn }}_data" {
+  bucket = aws_s3_bucket.{{ pn }}_data.id
+
+  depends_on = [aws_s3_bucket_public_access_block.{{ pn }}_data]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "DenyNonTLS"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.{{ pn }}_data.arn,
+          "${aws_s3_bucket.{{ pn }}_data.arn}/*"
+        ]
+        Condition = {
+          Bool = {
+            "aws:SecureTransport" = "false"
+          }
+        }
+      }
+    ]
+  })
+}
+
+output "s3_data_bucket_name" {
+  description = "Data S3 bucket name"
+  value       = aws_s3_bucket.{{ pn }}_data.id
+}
+
+output "s3_data_bucket_arn" {
+  description = "Data S3 bucket ARN"
+  value       = aws_s3_bucket.{{ pn }}_data.arn
+}

@@ -1,0 +1,114 @@
+# WAF v2 — Web Application Firewall (aws provider ~> 6.0)
+# Attached to CloudFront (scope = CLOUDFRONT, must be deployed in us-east-1).
+# Uses AWS Managed Rules: Core rule set + Known bad inputs + IP reputation list.
+
+resource "aws_wafv2_web_acl" "main" {
+  name  = "{{ project_name }}-${var.environment}-waf"
+  scope = "CLOUDFRONT"    # Use "REGIONAL" for ALB / API Gateway
+  description = "WAF for {{ project_name }} (${var.environment})"
+
+  default_action {
+    allow {}
+  }
+
+  # ── AWS Managed Rule Groups ──────────────────────────────────────────────────
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 10
+
+    override_action { none {} }
+
+    statement {
+      managed_rule_group_statement {
+        vendor_name = "AWS"
+        name        = "AWSManagedRulesCommonRuleSet"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "{{ project_name }}-${var.environment}-waf-common"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "AWSManagedRulesKnownBadInputsRuleSet"
+    priority = 20
+
+    override_action { none {} }
+
+    statement {
+      managed_rule_group_statement {
+        vendor_name = "AWS"
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "{{ project_name }}-${var.environment}-waf-bad-inputs"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "AWSManagedRulesAmazonIpReputationList"
+    priority = 30
+
+    override_action { none {} }
+
+    statement {
+      managed_rule_group_statement {
+        vendor_name = "AWS"
+        name        = "AWSManagedRulesAmazonIpReputationList"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "{{ project_name }}-${var.environment}-waf-ip-rep"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "{{ project_name }}-${var.environment}-waf"
+    sampled_requests_enabled   = true
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-waf"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+# WAF logging — send sampled requests to CloudWatch Logs
+resource "aws_cloudwatch_log_group" "waf" {
+  # WAF log group name MUST start with "aws-waf-logs-"
+  name              = "aws-waf-logs-{{ project_name }}-${var.environment}"
+  retention_in_days = 30
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-waf-logs"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_wafv2_web_acl_logging_configuration" "main" {
+  log_destination_configs = [aws_cloudwatch_log_group.waf.arn]
+  resource_arn            = aws_wafv2_web_acl.main.arn
+}
+
+output "waf_acl_arn" {
+  description = "WAF Web ACL ARN -- pass to aws_cloudfront_distribution.web_acl_id"
+  value       = aws_wafv2_web_acl.main.arn
+}
+
+output "waf_acl_id" {
+  description = "WAF Web ACL ID"
+  value       = aws_wafv2_web_acl.main.id
+}

@@ -1,0 +1,605 @@
+# services_catalog.yaml  v3 — registry-module aware
+# ─────────────────────────────────────────────────────────────────────────────
+# Single source of truth for every AWS service this tool knows about.
+# To add a new service: add a block here. Zero Python changes required.
+#
+# IMPORTANT DESIGN RULES:
+#   • vpc, iam, security-group are INFRASTRUCTURE LAYERS — they are auto-
+#     generated based on selected services, NOT listed in infra.yaml services.
+#   • Only application-level services go in the services list.
+#   • registry_module is preferred over terraform_resource. When present,
+#     both static templates and the dynamic generator use it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "3.0"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Terraform provider + backend defaults
+# ─────────────────────────────────────────────────────────────────────────────
+terraform:
+  required_version: ">= 1.5.0"
+  aws_provider_version: "~> 6.0"          # hashicorp/aws 6.49.0 (Jun 2026)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Infrastructure layers — auto-generated, never listed in infra.yaml services
+# ─────────────────────────────────────────────────────────────────────────────
+infra_layers:
+
+  vpc:
+    registry_module:
+      source: "terraform-aws-modules/vpc/aws"
+      version: "~> 6.0"                   # latest 6.6.1 (Apr 2026)
+    always_generate: true
+    description: "VPC with public/private/database subnets across 3 AZs"
+
+  iam:
+    registry_module:
+      source: "terraform-aws-modules/iam/aws"
+      version: "~> 6.0"                   # latest 6.6.1 (May 2026)
+    always_generate: true
+    description: "IAM roles, policies, instance profiles for compute targets"
+
+  security_group:
+    registry_module:
+      source: "terraform-aws-modules/security-group/aws"
+      version: "~> 5.0"
+    always_generate: true
+    description: "Security groups for compute and data services"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Application services — users list these in infra.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+
+  # ── Compute ────────────────────────────────────────────────────────────────
+
+  lambda:
+    category: compute
+    registry_module:
+      source: "terraform-aws-modules/lambda/aws"
+      version: "~> 8.0"                   # latest 8.8.0 (Apr 2026)
+    template: iac/compute/lambda.tf.j2
+    iam_templates:
+      - iac/iam/lambda.tf.j2
+    iam_actions:
+      - lambda:InvokeFunction
+      - lambda:GetFunction
+
+  ecs-fargate:
+    category: compute
+    registry_module:
+      source: "terraform-aws-modules/ecs/aws"
+      version: "~> 5.0"
+    template: iac/compute/ecs-fargate.tf.j2
+
+  eks:
+    category: compute
+    registry_module:
+      source: "terraform-aws-modules/eks/aws"
+      version: "~> 21.0"                  # latest 21.x (May 2026)
+      kubernetes_version: "1.33"
+    template: iac/compute/eks.tf.j2
+    iam_templates:
+      - iac/iam/eks.tf.j2
+
+  ec2:
+    category: compute
+    registry_module:
+      source: "terraform-aws-modules/ec2-instance/aws"
+      version: "~> 5.0"
+    template: null
+
+  apprunner:
+    category: compute
+    terraform_resource: aws_apprunner_service
+    template: null
+
+  batch:
+    category: compute
+    terraform_resource: aws_batch_job_definition
+    template: null
+
+  lightsail:
+    category: compute
+    terraform_resource: aws_lightsail_instance
+    template: null
+
+  # ── Ingress ────────────────────────────────────────────────────────────────
+
+  alb:
+    category: ingress
+    registry_module:
+      source: "terraform-aws-modules/alb/aws"
+      version: "~> 10.0"                  # latest 10.5.0
+    template: iac/compute/alb.tf.j2
+    valid_compute_targets: [ecs-fargate, eks, ec2]
+
+  api-gateway:
+    category: ingress
+    registry_module:
+      source: "terraform-aws-modules/apigateway-v2/aws"
+      version: "~> 5.0"
+    template: iac/compute/api-gateway.tf.j2
+    valid_compute_targets: [lambda, ecs-fargate, eks]
+
+  cloudfront:
+    category: ingress
+    terraform_resource: aws_cloudfront_distribution
+    template: null
+    valid_compute_targets: [lambda, alb, static-site, s3]
+
+  # ── CDN / Static ───────────────────────────────────────────────────────────
+
+  static-site:
+    category: cdn
+    registry_module:
+      source: "terraform-aws-modules/s3-bucket/aws"
+      version: "~> 4.0"
+    template: iac/compute/static-site.tf.j2
+
+  # ── Relational Databases ───────────────────────────────────────────────────
+
+  postgres:
+    category: database
+    registry_module:
+      source: "terraform-aws-modules/rds/aws"
+      version: "~> 7.0"                   # latest 7.2.0 (Mar 2026)
+    template: iac/data/rds.tf.j2
+    extra_vars:
+      db_engine: postgres
+      db_engine_version: "16.4"
+    iam_actions:
+      - rds-db:connect
+
+  mysql:
+    category: database
+    registry_module:
+      source: "terraform-aws-modules/rds/aws"
+      version: "~> 7.0"
+    template: iac/data/rds.tf.j2
+    extra_vars:
+      db_engine: mysql
+      db_engine_version: "8.0"
+    iam_actions:
+      - rds-db:connect
+
+  aurora-postgres:
+    category: database
+    registry_module:
+      source: "terraform-aws-modules/rds-aurora/aws"
+      version: "~> 9.0"
+    template: null
+    extra_vars:
+      db_engine: aurora-postgresql
+    iam_actions:
+      - rds-db:connect
+
+  aurora-mysql:
+    category: database
+    registry_module:
+      source: "terraform-aws-modules/rds-aurora/aws"
+      version: "~> 9.0"
+    template: null
+    extra_vars:
+      db_engine: aurora-mysql
+    iam_actions:
+      - rds-db:connect
+
+  # ── NoSQL / Key-Value ──────────────────────────────────────────────────────
+
+  dynamodb:
+    category: database
+    registry_module:
+      source: "terraform-aws-modules/dynamodb-table/aws"
+      version: "~> 4.0"
+    template: iac/data/dynamodb.tf.j2
+    iam_actions:
+      - dynamodb:GetItem
+      - dynamodb:PutItem
+      - dynamodb:UpdateItem
+      - dynamodb:DeleteItem
+      - dynamodb:Query
+      - dynamodb:Scan
+
+  opensearch:
+    category: database
+    terraform_resource: aws_opensearch_domain
+    registry_module:
+      source: "terraform-aws-modules/opensearch/aws"
+      version: "~> 1.0"
+    template: null
+    iam_actions:
+      - es:ESHttpGet
+      - es:ESHttpPost
+      - es:ESHttpPut
+      - es:ESHttpDelete
+
+  documentdb:
+    category: database
+    terraform_resource: aws_docdb_cluster
+    template: null
+    iam_actions:
+      - rds-db:connect
+
+  timestream:
+    category: database
+    terraform_resource: aws_timestreamwrite_database
+    template: null
+    iam_actions:
+      - timestream:WriteRecords
+      - timestream:DescribeEndpoints
+      - timestream:Select
+
+  # ── Cache ──────────────────────────────────────────────────────────────────
+
+  redis:
+    category: cache
+    registry_module:
+      source: "terraform-aws-modules/elasticache/aws"
+      version: "~> 1.0"
+    template: iac/data/redis.tf.j2
+    iam_actions: []
+
+  memcached:
+    category: cache
+    terraform_resource: aws_elasticache_cluster
+    template: null
+    iam_actions: []
+
+  # ── Object Storage ─────────────────────────────────────────────────────────
+
+  s3:
+    category: storage
+    registry_module:
+      source: "terraform-aws-modules/s3-bucket/aws"
+      version: "~> 4.0"
+    template: iac/data/s3.tf.j2
+    iam_actions:
+      - s3:GetObject
+      - s3:PutObject
+      - s3:DeleteObject
+      - s3:ListBucket
+
+  efs:
+    category: storage
+    registry_module:
+      source: "terraform-aws-modules/efs/aws"
+      version: "~> 2.0"                   # latest 2.2.0 (Feb 2026)
+    template: null
+    iam_actions:
+      - elasticfilesystem:ClientMount
+      - elasticfilesystem:ClientWrite
+
+  # ── Messaging / Events ─────────────────────────────────────────────────────
+
+  sqs:
+    category: messaging
+    registry_module:
+      source: "terraform-aws-modules/sqs/aws"
+      version: "~> 4.0"
+    template: iac/data/sqs.tf.j2
+    iam_actions:
+      - sqs:SendMessage
+      - sqs:ReceiveMessage
+      - sqs:DeleteMessage
+
+  eventbridge:
+    category: messaging
+    registry_module:
+      source: "terraform-aws-modules/eventbridge/aws"
+      version: "~> 3.0"
+    template: iac/data/eventbridge.tf.j2
+    iam_actions:
+      - events:PutEvents
+      - events:DescribeEventBus
+
+  sns:
+    category: messaging
+    registry_module:
+      source: "terraform-aws-modules/sns/aws"
+      version: "~> 6.0"
+    template: iac/data/sns.tf.j2
+    iam_actions:
+      - sns:Publish
+      - sns:GetTopicAttributes
+
+  kinesis:
+    category: messaging
+    terraform_resource: aws_kinesis_stream
+    template: null
+    iam_actions:
+      - kinesis:PutRecord
+      - kinesis:PutRecords
+      - kinesis:GetRecords
+      - kinesis:GetShardIterator
+      - kinesis:DescribeStream
+
+  kinesis-firehose:
+    category: messaging
+    terraform_resource: aws_kinesis_firehose_delivery_stream
+    template: null
+    iam_actions:
+      - firehose:PutRecord
+      - firehose:PutRecordBatch
+
+  msk:
+    category: messaging
+    terraform_resource: aws_msk_cluster
+    template: null
+    iam_actions:
+      - kafka-cluster:Connect
+      - kafka-cluster:ReadData
+      - kafka-cluster:WriteData
+
+  # ── Auth / Security ────────────────────────────────────────────────────────
+
+  cognito:
+    category: auth
+    terraform_resource: aws_cognito_user_pool
+    template: iac/data/cognito.tf.j2
+    iam_actions:
+      - cognito-idp:AdminGetUser
+      - cognito-idp:AdminCreateUser
+      - cognito-idp:InitiateAuth
+
+  kms:
+    category: security
+    registry_module:
+      source: "terraform-aws-modules/kms/aws"
+      version: "~> 3.0"
+    template: iac/data/kms.tf.j2
+    iam_actions:
+      - kms:Encrypt
+      - kms:Decrypt
+      - kms:GenerateDataKey*
+      - kms:DescribeKey
+
+  secrets-manager:
+    category: security
+    terraform_resource: aws_secretsmanager_secret
+    template: iac/data/secrets-manager.tf.j2
+    iam_actions:
+      - secretsmanager:GetSecretValue
+      - secretsmanager:DescribeSecret
+
+  waf:
+    category: security
+    terraform_resource: aws_wafv2_web_acl
+    template: iac/security/waf.tf.j2
+    iam_actions:
+      - wafv2:AssociateWebACL
+      - wafv2:GetWebACL
+
+  acm:
+    category: security
+    registry_module:
+      source: "terraform-aws-modules/acm/aws"
+      version: "~> 5.0"
+    template: null
+    iam_actions:
+      - acm:DescribeCertificate
+      - acm:ListCertificates
+
+  # ── ML / AI ────────────────────────────────────────────────────────────────
+
+  bedrock:
+    category: ml
+    terraform_resource: null               # IAM only
+    template: null
+    iam_actions:
+      - bedrock:InvokeModel
+      - bedrock:InvokeModelWithResponseStream
+
+  polly:
+    category: ml
+    terraform_resource: null               # IAM only
+    template: null
+    iam_actions:
+      - polly:SynthesizeSpeech
+
+  rekognition:
+    category: ml
+    terraform_resource: null               # IAM only
+    template: null
+    iam_actions:
+      - rekognition:DetectLabels
+      - rekognition:DetectFaces
+
+  textract:
+    category: ml
+    terraform_resource: null               # IAM only
+    template: null
+    iam_actions:
+      - textract:DetectDocumentText
+      - textract:AnalyzeDocument
+
+  sagemaker:
+    category: ml
+    terraform_resource: aws_sagemaker_endpoint
+    template: null
+    iam_actions:
+      - sagemaker:InvokeEndpoint
+      - sagemaker:DescribeEndpoint
+
+  # ── Analytics ──────────────────────────────────────────────────────────────
+
+  glue:
+    category: analytics
+    terraform_resource: aws_glue_job
+    template: null
+    iam_actions:
+      - glue:StartJobRun
+      - glue:GetJobRun
+      - glue:GetJob
+
+  athena:
+    category: analytics
+    terraform_resource: aws_athena_workgroup
+    template: null
+    iam_actions:
+      - athena:StartQueryExecution
+      - athena:GetQueryExecution
+      - athena:GetQueryResults
+
+  redshift:
+    category: analytics
+    terraform_resource: aws_redshift_cluster
+    template: null
+    iam_actions:
+      - redshift:GetClusterCredentials
+      - redshift-data:ExecuteStatement
+
+  # ── Orchestration ──────────────────────────────────────────────────────────
+
+  step-functions:
+    category: orchestration
+    registry_module:
+      source: "terraform-aws-modules/step-functions/aws"
+      version: "~> 4.0"
+    template: null
+    iam_actions:
+      - states:StartExecution
+      - states:DescribeExecution
+      - states:StopExecution
+
+  # ── Email ──────────────────────────────────────────────────────────────────
+
+  ses:
+    category: email
+    terraform_resource: aws_ses_domain_identity
+    template: null
+    iam_actions:
+      - ses:SendEmail
+      - ses:SendRawEmail
+
+  # ── DevOps ─────────────────────────────────────────────────────────────────
+
+  ecr:
+    category: devops
+    registry_module:
+      source: "terraform-aws-modules/ecr/aws"
+      version: "~> 2.0"
+    template: iac/devops/ecr.tf.j2
+    iam_actions:
+      - ecr:GetAuthorizationToken
+      - ecr:BatchGetImage
+      - ecr:PutImage
+
+  cloudwatch:
+    category: observability
+    terraform_resource: aws_cloudwatch_log_group
+    template: iac/observability/cloudwatch.tf.j2
+    iam_actions:
+      - logs:CreateLogGroup
+      - logs:CreateLogStream
+      - logs:PutLogEvents
+      - cloudwatch:PutMetricData
+      - cloudwatch:GetMetricData
+
+  quicksight:
+    category: analytics
+    terraform_resource: aws_quicksight_data_source
+    template: null
+    dynamic: true
+    description: "Amazon QuickSight BI dashboards + Amazon Q integration connecting to Redshift and RDS"
+    iam_actions:
+      - quicksight:CreateDataSource
+      - quicksight:CreateDataSet
+      - quicksight:CreateAnalysis
+      - quicksight:CreateDashboard
+      - quicksight:PassDataSource
+
+  ssm-parameter-store:
+    category: security
+    terraform_resource: aws_ssm_parameter
+    template: null
+    dynamic: true
+    description: "SSM Parameter Store for non-secret config values, encrypted with KMS CMK"
+    iam_actions:
+      - ssm:GetParameter
+      - ssm:GetParameters
+      - ssm:GetParametersByPath
+      - ssm:PutParameter
+
+  codebuild:
+    category: devops
+    terraform_resource: aws_codebuild_project
+    template: null
+    iam_actions:
+      - codebuild:StartBuild
+      - codebuild:BatchGetBuilds
+
+  # ── Networking (optional add-ons) ──────────────────────────────────────────
+
+  route53:
+    category: networking
+    registry_module:
+      source: "terraform-aws-modules/route53/aws"
+      version: "~> 3.0"
+    template: null
+    iam_actions:
+      - route53:ChangeResourceRecordSets
+      - route53:GetHostedZone
+
+  vpc-endpoint:
+    category: networking
+    terraform_resource: aws_vpc_endpoint
+    template: null
+    iam_actions: []
+
+  transit-gateway:
+    category: networking
+    registry_module:
+      source: "terraform-aws-modules/transit-gateway/aws"
+      version: "~> 2.0"
+    template: null
+    iam_actions: []
+
+  # ── Monitoring ─────────────────────────────────────────────────────────────
+
+  xray:
+    category: monitoring
+    terraform_resource: null               # IAM only
+    template: null
+    iam_actions:
+      - xray:PutTraceSegments
+      - xray:PutTelemetryRecords
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Compute combination rules
+# ─────────────────────────────────────────────────────────────────────────────
+compute_rules:
+  max_compute_targets: 3
+  valid_combinations:
+    - [lambda, eks]
+    - [lambda, ecs-fargate]
+    - [lambda, ec2]
+    - [ecs-fargate, eks]
+    - [lambda, eks, ec2]
+    - [lambda, ecs-fargate, ec2]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IAM resource ARN patterns (used by dynamic IAM generator)
+# {project} and {region} are replaced at generation time
+# ─────────────────────────────────────────────────────────────────────────────
+iam_resource_arns:
+  s3:              ["arn:aws:s3:::{project}-*", "arn:aws:s3:::{project}-*/*"]
+  dynamodb:        ["arn:aws:dynamodb:{region}:*:table/{project}-*"]
+  sqs:             ["arn:aws:sqs:{region}:*:{project}-*"]
+  eventbridge:     ["arn:aws:events:{region}:*:event-bus/{project}-*"]
+  sns:             ["arn:aws:sns:{region}:*:{project}-*"]
+  kinesis:         ["arn:aws:kinesis:{region}:*:stream/{project}-*"]
+  kms:             ["arn:aws:kms:{region}:*:key/*"]
+  secrets-manager: ["arn:aws:secretsmanager:{region}:*:secret:{project}-*"]
+  glue:            ["arn:aws:glue:{region}:*:job/{project}-*"]
+  step-functions:  ["arn:aws:states:{region}:*:stateMachine:{project}-*"]
+  opensearch:      ["arn:aws:es:{region}:*:domain/{project}-*"]
+  ecr:             ["arn:aws:ecr:{region}:*:repository/{project}-*"]
+  lambda:          ["arn:aws:lambda:{region}:*:function:{project}-*"]
+  sagemaker:       ["arn:aws:sagemaker:{region}:*:endpoint/{project}-*"]
+  bedrock:         ["arn:aws:bedrock:*::foundation-model/*"]
+  polly:           ["*"]
+  rekognition:     ["*"]
+  textract:        ["*"]
+  ses:             ["*"]
+  xray:            ["*"]

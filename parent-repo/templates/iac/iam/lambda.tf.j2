@@ -1,0 +1,269 @@
+# IAM — Lambda execution role (Section 5.2)
+resource "aws_iam_role" "lambda_exec" {
+  name = "{{ project_name }}-${var.environment}-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-lambda-role"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Allow Lambda to run inside a VPC (needed when EKS endpoint is private)
+resource "aws_iam_role_policy_attachment" "lambda_vpc" {
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
+{% if 'secrets-manager' in services %}
+# Allow Lambda to read secrets (kubeconfig, credentials)
+resource "aws_iam_role_policy" "lambda_secrets" {
+  name = "secrets-manager-read"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "ReadSecrets"
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ]
+      Resource = "arn:aws:secretsmanager:*:*:secret:{{ project_name }}/${var.environment}/*"
+    }]
+  })
+}
+{% endif %}
+{% if 'eks' in services %}
+# Allow Lambda to describe EKS cluster (needed to build kubeconfig)
+resource "aws_iam_role_policy" "lambda_eks" {
+  name = "eks-describe"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "DescribeEKS"
+      Effect = "Allow"
+      Action = ["eks:DescribeCluster"]
+      Resource = "arn:aws:eks:*:*:cluster/{{ project_name }}-${var.environment}-*"
+    }]
+  })
+}
+{% endif %}
+{% if 'sns' in services %}
+# Allow Lambda to publish deployment alerts to SNS
+resource "aws_iam_role_policy" "lambda_sns" {
+  name = "sns-publish"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "PublishSNS"
+      Effect = "Allow"
+      Action = ["sns:Publish"]
+      Resource = "arn:aws:sns:*:*:{{ project_name }}-${var.environment}-*"
+    }]
+  })
+}
+{% endif %}
+{% if 'kms' in services %}
+# Allow Lambda to use KMS CMK for decrypting secrets
+resource "aws_iam_role_policy" "lambda_kms" {
+  name = "kms-decrypt"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "KMSDecrypt"
+      Effect = "Allow"
+      Action = ["kms:Decrypt", "kms:GenerateDataKey"]
+      Resource = "arn:aws:kms:*:*:key/*"
+    }]
+  })
+}
+{% endif %}
+
+resource "aws_iam_role_policy" "lambda_deny_sensitive" {
+  name = "deny-sensitive"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Deny"
+      Action   = ["iam:*", "organizations:*", "account:*"]
+      Resource = "*"
+    }]
+  })
+}
+{% if data_stores and 'sqs' in data_stores %}
+# Allow Lambda to consume messages from SQS (required for event source mapping)
+resource "aws_iam_role_policy" "lambda_sqs" {
+  name = "sqs-consume"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+      ]
+      Resource = "arn:aws:sqs:*:*:{{ project_name }}-${var.environment}-*"
+    }]
+  })
+}
+{% endif %}
+{% if data_stores and 'dynamodb' in data_stores %}
+# Allow Lambda to read/write DynamoDB
+resource "aws_iam_role_policy" "lambda_dynamodb" {
+  name = "dynamodb-readwrite"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ]
+      Resource = "arn:aws:dynamodb:*:*:table/{{ project_name }}-${var.environment}-*"
+    }]
+  })
+}
+{% endif %}
+{% if data_stores and 's3' in data_stores %}
+# Allow Lambda to read/write S3
+resource "aws_iam_role_policy" "lambda_s3" {
+  name = "s3-readwrite"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ]
+      Resource = [
+        "arn:aws:s3:::{{ project_name }}-${var.environment}-*",
+        "arn:aws:s3:::{{ project_name }}-${var.environment}-*/*"
+      ]
+    }]
+  })
+}
+{% endif %}
+{% if data_stores and 'bedrock' in data_stores %}
+# Allow Lambda to invoke Bedrock models and query Knowledge Bases
+resource "aws_iam_role_policy" "lambda_bedrock" {
+  name = "bedrock-invoke"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockInvokeModel"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ]
+        Resource = "arn:aws:bedrock:*::foundation-model/*"
+      },
+      {
+        Sid    = "BedrockKnowledgeBase"
+        Effect = "Allow"
+        Action = [
+          "bedrock:Retrieve",
+          "bedrock:RetrieveAndGenerate"
+        ]
+        Resource = "arn:aws:bedrock:*:*:knowledge-base/*"
+      }
+    ]
+  })
+}
+{% endif %}
+{% if data_stores and 'polly' in data_stores %}
+# Allow Lambda to synthesize speech via Polly and store audio in S3
+resource "aws_iam_role_policy" "lambda_polly" {
+  name = "polly-synthesize"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "PollySynthesize"
+        Effect = "Allow"
+        Action = [
+          "polly:SynthesizeSpeech",
+          "polly:DescribeVoices"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "PollyAudioStorage"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject"
+        ]
+        Resource = [
+          "arn:aws:s3:::{{ project_name }}-${var.environment}-audio-*",
+          "arn:aws:s3:::{{ project_name }}-${var.environment}-audio-*/*"
+        ]
+      }
+    ]
+  })
+}
+{% endif %}
+{% if data_stores and 'cognito' in data_stores %}
+# Allow Lambda to verify Cognito tokens and manage users
+resource "aws_iam_role_policy" "lambda_cognito" {
+  name = "cognito-access"
+  role = aws_iam_role.lambda_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "CognitoUserPoolAccess"
+      Effect = "Allow"
+      Action = [
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminListGroupsForUser",
+        "cognito-idp:ListUsers"
+      ]
+      Resource = "arn:aws:cognito-idp:*:*:userpool/*"
+    }]
+  })
+}
+{% endif %}

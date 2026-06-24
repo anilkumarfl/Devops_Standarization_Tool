@@ -1,0 +1,68 @@
+# RDS — managed relational database (aws provider ~> 6.0)
+resource "aws_db_subnet_group" "main" {
+  name       = "{{ project_name }}-${var.environment}-rds-subnet-grp"
+  subnet_ids = aws_subnet.private[*].id
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-rds-subnet-grp"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_db_instance" "main" {
+  identifier     = "{{ project_name }}-${var.environment}-rds"
+  engine         = "{{ db_engine | default('postgres') }}"
+  engine_version = "{{ '17' if db_engine == 'postgres' else '8.4' }}"
+  instance_class = var.environment == "prod" ? "db.t3.small" : "db.t3.micro"
+
+  allocated_storage     = 20
+  max_allocated_storage = 100   # storage autoscaling ceiling
+
+  db_name  = replace("{{ project_name }}", "-", "_")
+  username = "dbadmin"
+
+  # Password managed by Secrets Manager — never hardcoded in state
+  manage_master_user_password = true
+
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.app.id]
+
+  multi_az                = var.multi_az
+  backup_retention_period = var.environment == "prod" ? 35 : {{ backup_retention | default(7) }}
+  backup_window           = "03:00-04:00"
+  maintenance_window      = "Mon:04:00-Mon:05:00"
+
+  # Encryption at rest with CMK
+  storage_encrypted = true
+  kms_key_id        = try(aws_kms_key.main.arn, null)
+
+  # Performance Insights — free for db.t3 instances
+  performance_insights_enabled          = true
+  performance_insights_retention_period = var.environment == "prod" ? 731 : 7
+
+  # Use the latest recommended CA certificate
+  ca_cert_identifier = "rds-ca-rsa2048-g1"
+
+  deletion_protection = var.environment == "prod" ? true : false
+  skip_final_snapshot = var.environment != "prod"
+
+  final_snapshot_identifier = var.environment != "prod" ? null : "{{ project_name }}-${var.environment}-final-snap"
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-rds"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+output "rds_endpoint" {
+  description = "RDS connection endpoint (host:port)"
+  value       = aws_db_instance.main.endpoint
+  sensitive   = true
+}
+
+output "rds_secret_arn" {
+  description = "Secrets Manager ARN containing the RDS master password"
+  value       = aws_db_instance.main.master_user_secret[0].secret_arn
+}

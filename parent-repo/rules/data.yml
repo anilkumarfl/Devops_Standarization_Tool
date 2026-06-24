@@ -1,0 +1,57 @@
+templates:
+  # Each entry: if config matches `when`, render the template at `template`
+  # Multiple entries can match — all matching templates are rendered.
+
+  - id: data-rds-postgres
+    when:
+      data.stores.contains: postgres
+    template: iac/data/rds.tf.j2
+    vars:
+      db_engine: postgres
+
+  - id: data-rds-mysql
+    when:
+      data.stores.contains: mysql
+    template: iac/data/rds.tf.j2
+    vars:
+      db_engine: mysql
+
+  - id: data-redis
+    when:
+      data.stores.contains: redis
+    template: iac/data/redis.tf.j2
+
+  - id: data-s3
+    when:
+      data.stores.contains: s3
+    template: iac/data/s3.tf.j2
+
+  - id: data-dynamodb
+    when:
+      data.stores.contains: dynamodb
+    template: iac/data/dynamodb.tf.j2
+
+  - id: data-cognito
+    when:
+      auth.required: true
+    template: iac/data/cognito.tf.j2
+
+  - id: data-kms
+    when:
+      auth.required: true
+    template: iac/data/kms.tf.j2
+
+  - id: data-sqs
+    when:
+      data.stores.contains: sqs
+    template: iac/data/sqs.tf.j2
+
+  - id: data-eventbridge
+    when:
+      data.stores.contains: eventbridge
+    template: iac/data/eventbridge.tf.j2
+
+  - id: data-kms-stores
+    when:
+      data.stores.nonempty: true
+    template: iac/data/kms.tf.j2

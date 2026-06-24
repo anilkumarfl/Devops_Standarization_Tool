@@ -1,0 +1,45 @@
+# SNS — Simple Notification Service (aws provider ~> 6.0)
+# Used for deployment event notifications from Lambda and SQS consumers.
+
+resource "aws_sns_topic" "notifications" {
+  name              = "{{ project_name }}-${var.environment}-notifications"
+  {% if 'kms' in services %}
+  kms_master_key_id = aws_kms_key.main.id
+  {% endif %}
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-notifications"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+# Allow EventBridge and Lambda to publish to this topic
+resource "aws_sns_topic_policy" "notifications" {
+  arn = aws_sns_topic.notifications.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowLambdaPublish"
+        Effect = "Allow"
+        Principal = { Service = "lambda.amazonaws.com" }
+        Action   = "SNS:Publish"
+        Resource = aws_sns_topic.notifications.arn
+      },
+      {
+        Sid    = "AllowEventBridgePublish"
+        Effect = "Allow"
+        Principal = { Service = "events.amazonaws.com" }
+        Action   = "SNS:Publish"
+        Resource = aws_sns_topic.notifications.arn
+      }
+    ]
+  })
+}
+
+output "sns_topic_arn" {
+  description = "SNS notification topic ARN"
+  value       = aws_sns_topic.notifications.arn
+}

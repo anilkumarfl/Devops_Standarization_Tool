@@ -1,0 +1,108 @@
+project:
+  name: daax-applicaiton 
+  region: us-west-2
+  owner: devops-team
+  type: container-platform
+
+stage: production
+
+NAMING CONVENTIONS: 
+All generated AWS resource names follow this pattern:
+
+  <project_name>-<environment>-<service_name>
+  daax-applicaiton-uat-ecr
+
+team:
+  size: medium
+  ops_maturity: high
+
+runtime:
+  language: python
+  containerised: true
+
+# ── Services ─────────────────────────────────────────────────────────────────
+# Direct mapping of all infrastructure components from the architecture diagram.
+services:
+  # Container Registry
+  - ecr                   # Stores container images; triggers deployment on push
+
+  # Event Orchestration & Queueing
+  - eventbridge           # Detects ECR pushes and routes events
+  - sqs                   # Buffers deployment events and handles retry state
+
+  # Compute & Deployment Automation
+  - lambda                # Execution worker that applies manifests to the EKS cluster
+
+  # Core Container Platform
+  - eks                   # Managed Kubernetes cluster hosting the workloads
+
+  # Security & Key Management
+  - kms                   # Encrypts repository images, state, and secrets
+  - secrets-manager       # Securely stores EKS cluster tokens and kubeconfig secrets
+
+  # Monitoring & Alerting
+  - sns                   # Dispatches pipeline status alerts to subscribers
+  - cloudwatch            # Aggregates logs and metrics from Lambda and EKS containers
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+auth:
+  required: true
+  method: iam             # IAM Roles for Lambda execution and EKS authentication
+
+# ── Connections ──────────────────────────────────────────────────────────────
+# Directional relationship matrix defining network and identity boundaries.
+connections:
+  # Pipeline Trigger Chain
+  - { from: ecr,             to: eventbridge } # Image push emits state change event
+  - { from: eventbridge,     to: lambda      } # Routes matching rules to deployment worker
+  - { from: eventbridge,     to: sqs         } # Logs events in queue for audit trails
+
+  # Deployment Execution Chain
+  - { from: secrets-manager, to: lambda      } # Lambda pulls credentials to access EKS
+  - { from: lambda,          to: eks         } # Applies rolling update manifests to K8s API
+  - { from: kms,             to: secrets-manager } # KMS manages wrapper keys for secrets
+
+  # Observability & Alerting Chain
+  - { from: lambda,          to: sns         } # Notifies success/failure alerts
+  - { from: lambda,          to: cloudwatch  } # Appends function logs and runtime durations
+  - { from: eks,             to: cloudwatch  } # Container Insights captures node/pod metrics
+
+# ── Flows ────────────────────────────────────────────────────────────────────
+# Logical end-to-end user and system journeys across the infrastructure.
+flows:
+  deployment_flow:
+    description: "Automated continuous delivery journey: A new container image is pushed to ECR, triggering an EventBridge rule. This invokes a Python-based Lambda function which securely fetches cluster credentials from AWS Secrets Manager, authenticates via IAM, and executes a rolling update to the EKS worker nodes."
+    services: [ecr, eventbridge, secrets-manager, lambda, eks]
+
+  notification_flow:
+    description: "Pipeline observability journey: Lifecycle events and runtime failures are intercepted during deployment execution. Lambda forwards status updates to SNS to alert developers, while both Lambda execution logs and EKS Container Insights metrics are unified inside CloudWatch."
+    services: [lambda, eks, sns, cloudwatch]
+
+# ── Environments ─────────────────────────────────────────────────────────────
+# Infrastructure topologies and compute footprint allocations per environment.
+environments:
+  uat:
+    multi_az: true
+    eks:
+      node_count: 2
+      instance_type: t3.xlarge
+    lambda:
+      memory_mb: 512
+      timeout_s: 60
+
+  prod:
+    multi_az: true
+    eks:
+      node_count: 3
+      instance_type: t3.xlarge
+    lambda:
+      memory_mb: 1024
+      timeout_s: 60
+
+# ── CI/CD ────────────────────────────────────────────────────────────────────
+cicd:
+  auto_deploy:
+    - dev
+  manual_deploy:
+    - uat
+    - prod

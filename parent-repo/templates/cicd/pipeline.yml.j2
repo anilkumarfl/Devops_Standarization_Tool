@@ -1,0 +1,134 @@
+name: "<<project_name>> — CI/CD"
+
+on:
+  push:
+    branches: [main]
+    paths: [".infra/**", "src/**", "Dockerfile"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+      - name: fmt check
+        run: terraform fmt -check -recursive .infra/iac/
+      - name: validate
+        run: terraform validate .infra/iac/
+      - name: checkov security scan
+        run: |
+          pip install checkov
+          checkov -d .infra/iac/ --framework terraform
+<% if compute_target == 'eks' %>
+  build-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push
+        id: meta
+        run: |
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/<<project_name>>:${{ github.sha }}
+          docker build -t $IMAGE_URI .
+          docker push $IMAGE_URI
+          echo "tags=$IMAGE_URI" >> $GITHUB_OUTPUT
+<% endif %>
+  plan-dev:
+    name: Plan — dev
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+        working-directory: .infra/iac/
+      - run: terraform plan -var-file=../../environments/dev.tfvars.example
+        working-directory: .infra/iac/
+
+  deploy-dev:
+    name: Deploy — dev
+    needs: [plan-dev<% if compute_target == 'eks' %>, build-push<% endif %>]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform apply -auto-approve -var-file=../../environments/dev.tfvars.example
+        working-directory: .infra/iac/
+<% if compute_target == 'eks' %>
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+      - name: Deploy to EKS
+        run: |
+          kubectl set image deployment/<<project_name>> <<project_name>>=${{ needs.build-push.outputs.image_tag }} --record
+          kubectl rollout status deployment/<<project_name>>
+<% endif %>
+  deploy-staging:
+    name: Deploy — staging
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: <<"staging" if cicd_envs == "auto-dev-staging" else "staging  # requires manual approval">>
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform apply -auto-approve -var-file=../../environments/staging.tfvars.example
+        working-directory: .infra/iac/
+<% if compute_target == 'eks' %>
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+      - name: Deploy to EKS
+        run: |
+          kubectl set image deployment/<<project_name>> <<project_name>>=${{ needs.build-push.outputs.image_tag }} --record
+          kubectl rollout status deployment/<<project_name>>
+<% endif %>
+  deploy-prod:
+    name: Deploy — prod
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: prod  # requires manual approval
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform apply -auto-approve -var-file=../../environments/prod.tfvars.example
+        working-directory: .infra/iac/
+<% if compute_target == 'eks' %>
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+      - name: Deploy to EKS
+        run: |
+          kubectl set image deployment/<<project_name>> <<project_name>>=${{ needs.build-push.outputs.image_tag }} --record
+          kubectl rollout status deployment/<<project_name>>
+<% endif %>

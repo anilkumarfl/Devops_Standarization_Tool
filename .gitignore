@@ -1,0 +1,112 @@
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+crash.log
+crash.*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+ENV/
+env/
+.venv
+.env
+.env.local
+.env.*.local
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.atom/
+.project
+.pydevproject
+.settings/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+.AppleDouble
+.LSOverride
+._*
+
+# Generated Output
+.infra/
+generated/
+output/
+dist/
+
+# Secrets & Credentials
+*.pem
+*.key
+*.pub
+.aws/
+credentials
+.kubeconfig
+
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# CI/CD
+.github/workflows/*.log
+.gitlab-ci-local/
+
+# Docker
+docker-compose.override.yml
+
+# Miscellaneous
+*.bak
+*.backup
+*.tmp
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.pid
+*.seed
+*.pid.lock
+
+
+.claude

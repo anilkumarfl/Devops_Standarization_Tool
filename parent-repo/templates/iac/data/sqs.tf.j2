@@ -1,0 +1,69 @@
+# SQS — standard queue with dead-letter queue (aws provider ~> 6.0)
+
+# Dead-letter queue — catches messages that fail processing after maxReceiveCount
+resource "aws_sqs_queue" "dlq" {
+  name                      = "{{ project_name }}-${var.environment}-dlq"
+  message_retention_seconds = 1209600   # 14 days — maximum retention for investigation
+  sqs_managed_sse_enabled   = true      # SSE-SQS encryption at rest
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-dlq"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+# Allow the main queue to send failed messages to the DLQ
+resource "aws_sqs_queue_redrive_allow_policy" "dlq" {
+  queue_url = aws_sqs_queue.dlq.id
+
+  redrive_allow_policy = jsonencode({
+    redrivePermission = "byQueue"
+    sourceQueueArns   = [aws_sqs_queue.main.arn]
+  })
+}
+
+# Main queue — application messages
+resource "aws_sqs_queue" "main" {
+  name                       = "{{ project_name }}-${var.environment}-queue"
+  visibility_timeout_seconds = 300              # must be >= Lambda timeout
+  message_retention_seconds  = 345600           # 4 days
+  receive_wait_time_seconds  = 20               # long polling — reduces empty receives
+  sqs_managed_sse_enabled    = true             # SSE-SQS encryption at rest
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.dlq.arn
+    maxReceiveCount     = 3                     # retry 3× before sending to DLQ
+  })
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-queue"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+{% if 'sqs->lambda' in connections %}
+# Wire SQS as Lambda event source — Lambda polls and processes messages in batches
+resource "aws_lambda_event_source_mapping" "sqs_trigger" {
+  event_source_arn                   = aws_sqs_queue.main.arn
+  function_name                      = aws_lambda_function.app.arn
+  batch_size                         = 10
+  maximum_batching_window_in_seconds = 5     # wait up to 5s to fill a batch
+  enabled                            = true
+
+  # Bisect batch on error — narrows down which message is failing
+  bisect_batch_on_function_error = true
+
+  function_response_types = ["ReportBatchItemFailures"]
+}
+{% endif %}
+
+output "sqs_queue_url" {
+  description = "Main SQS queue URL"
+  value       = aws_sqs_queue.main.id
+}
+
+output "sqs_queue_arn" {
+  description = "Main SQS queue ARN"
+  value       = aws_sqs_queue.main.arn
+}

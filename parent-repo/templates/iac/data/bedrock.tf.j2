@@ -1,0 +1,12 @@
+# Amazon Bedrock — AI/ML Knowledge Base
+# No Terraform resource needed: Bedrock is a managed API service.
+# IAM permissions are granted on the Lambda execution role (see iam.tf).
+#
+# To create a Bedrock Knowledge Base, use the AWS Console or CLI:
+#   aws bedrock create-knowledge-base \
+#     --name "{{ project_name }}-${var.environment}-kb" \
+#     --role-arn <bedrock-role-arn> \
+#     --storage-configuration '{"type": "OPENSEARCH_SERVERLESS", ...}'
+#
+# Reference the Knowledge Base ID in Lambda via environment variable:
+#   BEDROCK_KB_ID = "<knowledge-base-id>"

@@ -1,0 +1,164 @@
+rules:
+  # --- web-api ---
+  - id: compute-fargate-web-api
+    when:
+      project.type: web-api
+      runtime.containerised: true
+      stage: [prototype, early, growth]
+    then:
+      compute_target: ecs-fargate
+      reason: >
+        ECS Fargate removes cluster management overhead. Appropriate for
+        containerised workloads before scale justifies Kubernetes.
+      warn_if:
+        team.ops_maturity: low
+        message: "Consider App Runner for lower operational overhead at low ops maturity."
+
+  - id: compute-lambda-web-api
+    when:
+      project.type: web-api
+      runtime.containerised: false
+      stage: [prototype, early]
+    then:
+      compute_target: lambda
+      reason: >
+        Lambda is appropriate for non-containerised web-api at prototype/early stage
+        with a small team. Eliminates all infrastructure management.
+
+  - id: compute-k8s-web-api-high-maturity
+    when:
+      project.type: web-api
+      runtime.containerised: true
+      team.ops_maturity: high
+    then:
+      compute_target: eks
+      reason: >
+        EKS selected: high ops maturity signals the team can manage Kubernetes
+        operational overhead. Provides full control over scheduling, networking,
+        and multi-workload co-location regardless of project stage.
+
+  - id: compute-k8s-web-api-scale
+    when:
+      project.type: web-api
+      runtime.containerised: true
+      stage: scale
+      team.ops_maturity: high
+    then:
+      compute_target: eks
+      reason: >
+        EKS is appropriate at scale stage with high ops maturity.
+        Cost and control benefits outweigh operational complexity at this point.
+
+  # --- static-site ---
+  - id: compute-static-site
+    when:
+      project.type: static-site
+      stage: [prototype, early, growth, scale]
+    then:
+      compute_target: cloudfront-s3
+      reason: >
+        Static sites require no server-side compute. S3 + CloudFront provides
+        globally distributed delivery with TLS, zero infrastructure to manage,
+        and minimal cost.
+
+  # --- data-pipeline ---
+  - id: compute-fargate-data-pipeline
+    when:
+      project.type: data-pipeline
+      runtime.containerised: true
+      stage: [prototype, early, growth]
+    then:
+      compute_target: ecs-fargate
+      reason: >
+        ECS Fargate is appropriate for containerised data pipeline jobs.
+        EventBridge or CloudWatch Events handles scheduling.
+        S3 provides the staging area between pipeline steps.
+      warn_if:
+        team.ops_maturity: low
+        message: "Consider AWS Glue for fully managed ETL at low ops maturity."
+
+  - id: compute-lambda-data-pipeline
+    when:
+      project.type: data-pipeline
+      runtime.containerised: false
+      stage: [prototype, early]
+    then:
+      compute_target: lambda
+      reason: >
+        Lambda is appropriate for short-duration, event-triggered data pipeline
+        tasks at early stage. No infrastructure management required.
+
+  - id: compute-fargate-data-pipeline-scale
+    when:
+      project.type: data-pipeline
+      runtime.containerised: true
+      stage: scale
+    then:
+      compute_target: ecs-fargate
+      reason: >
+        ECS Fargate continues to be the right choice for data pipelines at scale
+        unless the workload requires stateful streaming, in which case consider
+        EMR or Kinesis as a destination.
+
+  # --- worker ---
+  - id: compute-fargate-worker
+    when:
+      project.type: worker
+      runtime.containerised: true
+      stage: [prototype, early, growth]
+    then:
+      compute_target: ecs-fargate
+      reason: >
+        ECS Fargate for workers. SQS as the default queue. Private subnet only —
+        no ALB. Scales on queue depth via Application Auto Scaling.
+
+  - id: compute-lambda-worker
+    when:
+      project.type: worker
+      runtime.containerised: false
+      stage: [prototype, early]
+    then:
+      compute_target: lambda
+      reason: >
+        Lambda is the natural fit for event-driven, short-duration workers.
+        SQS trigger eliminates polling. No infrastructure to manage.
+
+  - id: compute-fargate-worker-scale
+    when:
+      project.type: worker
+      runtime.containerised: true
+      stage: scale
+    then:
+      compute_target: ecs-fargate
+      reason: >
+        ECS Fargate remains appropriate for workers at scale. Auto Scaling
+        group keyed on SQS ApproximateNumberOfMessagesVisible handles demand.
+
+
+# Anti-pattern warnings — always evaluated, non-blocking (Section 11.4)
+anti_patterns:
+  - id: ap-eks-small-team-early
+    when:
+      stage: [prototype, early]
+      team.size: [solo, small]
+    message: >
+      WARNING: EKS at prototype/early stage with a solo or small team is strongly
+      discouraged. Cluster management overhead will outweigh any benefit.
+      Use ECS Fargate until scale stage is reached.
+
+  - id: ap-eks-low-maturity
+    when:
+      stage: scale
+      team.ops_maturity: low
+    message: >
+      WARNING: Scale stage selected but ops_maturity is low. EKS and advanced
+      auto-scaling patterns require higher operational readiness. Consider
+      raising ops maturity or staying on ECS Fargate.
+
+  - id: ap-prototype-overengineered
+    when:
+      stage: prototype
+      team.size: [solo, small]
+    message: >
+      WARNING: Review generated config for over-engineering at prototype stage.
+      Prototype projects should use the simplest viable compute and no multi-AZ.

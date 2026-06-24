@@ -1,0 +1,165 @@
+{% set pn = project_name | replace('-', '_') %}
+# Static site — S3 origin + CloudFront CDN with OAC (aws provider ~> 6.0)
+# Origin Access Control (OAC) is the modern replacement for legacy OAI.
+
+resource "aws_s3_bucket" "{{ pn }}_site" {
+  bucket = "{{ project_name }}-${var.environment}-site"
+
+  force_destroy = var.environment != "prod"
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-site"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "{{ pn }}_site" {
+  bucket                  = aws_s3_bucket.{{ pn }}_site.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "{{ pn }}_site" {
+  bucket = aws_s3_bucket.{{ pn }}_site.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "{{ pn }}_site" {
+  bucket = aws_s3_bucket.{{ pn }}_site.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+    bucket_key_enabled = true
+  }
+}
+
+# OAC — signs requests from CloudFront to S3 using SigV4
+resource "aws_cloudfront_origin_access_control" "site" {
+  name                              = "{{ project_name }}-${var.environment}-oac"
+  description                       = "OAC for {{ project_name }} site bucket"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+# CloudFront distribution
+resource "aws_cloudfront_distribution" "site" {
+  enabled             = true
+  default_root_object = "index.html"
+  price_class         = "PriceClass_100"   # US, Canada, Europe (cheapest)
+  comment             = "{{ project_name }}-${var.environment} static site"
+
+  {% if 'waf' in services %}
+  # WAF connection: waf -> static-site (from infra.yaml connections)
+  web_acl_id = aws_wafv2_web_acl.main.arn
+  {% endif %}
+
+  origin {
+    domain_name              = aws_s3_bucket.{{ pn }}_site.bucket_regional_domain_name
+    origin_id                = "S3Origin"
+    origin_access_control_id = aws_cloudfront_origin_access_control.site.id
+  }
+
+  default_cache_behavior {
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = "S3Origin"
+    viewer_protocol_policy = "redirect-to-https"
+
+    # Managed cache policy: CachingOptimized (compress, long TTL)
+    cache_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+    compress        = true
+  }
+
+  # SPA fallback — return index.html for any 403/404 so React Router works
+  custom_error_response {
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
+  custom_error_response {
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+    minimum_protocol_version       = "TLSv1.2_2021"
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-cdn"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+# Bucket policy — allow only CloudFront OAC to read objects
+resource "aws_s3_bucket_policy" "{{ pn }}_site" {
+  bucket     = aws_s3_bucket.{{ pn }}_site.id
+  depends_on = [aws_s3_bucket_public_access_block.{{ pn }}_site]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowCloudFrontOAC"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.{{ pn }}_site.arn}/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = aws_cloudfront_distribution.site.arn
+          }
+        }
+      },
+      {
+        Sid       = "DenyNonTLS"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.{{ pn }}_site.arn,
+          "${aws_s3_bucket.{{ pn }}_site.arn}/*"
+        ]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
+        }
+      }
+    ]
+  })
+}
+
+output "cloudfront_domain" {
+  description = "CloudFront distribution domain name"
+  value       = aws_cloudfront_distribution.site.domain_name
+}
+
+output "cloudfront_distribution_id" {
+  description = "CloudFront distribution ID (needed for cache invalidation in CI)"
+  value       = aws_cloudfront_distribution.site.id
+}
+
+output "site_bucket_name" {
+  description = "S3 site bucket name (deploy built assets here)"
+  value       = aws_s3_bucket.{{ pn }}_site.id
+}

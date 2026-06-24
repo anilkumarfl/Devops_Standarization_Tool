@@ -1,0 +1,56 @@
+# ElastiCache — Redis 7 replication group (aws provider ~> 6.0)
+# aws_elasticache_replication_group is the modern resource (replaces aws_elasticache_cluster for Redis)
+
+resource "aws_elasticache_subnet_group" "main" {
+  name       = "{{ project_name }}-${var.environment}-redis-subnet-grp"
+  subnet_ids = aws_subnet.private[*].id
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-redis-subnet-grp"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_elasticache_replication_group" "main" {
+  replication_group_id = "{{ project_name }}-${var.environment}-redis"
+  description          = "{{ project_name }} ${var.environment} Redis cache"
+
+  node_type            = var.environment == "prod" ? "cache.t3.small" : "cache.t3.micro"
+  num_cache_clusters   = var.multi_az ? 2 : 1   # 1 primary + 1 replica in prod
+  engine_version       = "7.2"
+  parameter_group_name = "default.redis7.cluster.off"
+  port                 = 6379
+
+  subnet_group_name  = aws_elasticache_subnet_group.main.name
+  security_group_ids = [aws_security_group.app.id]
+
+  # Encryption
+  at_rest_encryption_enabled = true
+  transit_encryption_enabled = true
+  transit_encryption_mode    = "required"   # enforce TLS — no plaintext connections
+  kms_key_id                 = try(aws_kms_key.main.arn, null)
+
+  # High availability
+  automatic_failover_enabled = var.multi_az
+  multi_az_enabled           = var.multi_az
+
+  auto_minor_version_upgrade = true
+
+  # Snapshot for prod
+  snapshot_retention_limit = var.environment == "prod" ? 7 : 1
+  snapshot_window          = "03:00-04:00"
+  maintenance_window       = "Mon:04:00-Mon:05:00"
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-redis"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+output "redis_primary_endpoint" {
+  description = "Redis primary endpoint address"
+  value       = aws_elasticache_replication_group.main.primary_endpoint_address
+  sensitive   = true
+}

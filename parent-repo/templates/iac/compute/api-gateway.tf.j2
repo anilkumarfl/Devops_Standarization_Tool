@@ -1,0 +1,118 @@
+# API Gateway v2 HTTP API — low-latency proxy to Lambda (aws provider ~> 6.0)
+# Connection: api-gateway -> lambda (from infra.yaml connections)
+# Lambda invoke_arn is passed in via var.lambda_invoke_arn (set in root main.tf from module.lambda.invoke_arn)
+
+resource "aws_apigatewayv2_api" "main" {
+  name          = "{{ project_name }}-${var.environment}-api"
+  protocol_type = "HTTP"
+  description   = "{{ project_name }} HTTP API (${var.environment})"
+
+  cors_configuration {
+    allow_origins = var.environment == "prod" ? ["https://${var.app_domain}"] : ["*"]
+    allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    allow_headers = ["Content-Type", "Authorization", "X-Amz-Date", "X-Api-Key"]
+    max_age       = 300
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-api"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_cloudwatch_log_group" "api_gw" {
+  name              = "/aws/apigateway/{{ project_name }}-${var.environment}"
+  retention_in_days = var.log_retention_days
+  {% if 'kms' in services %}
+  kms_key_id = aws_kms_key.main.arn
+  {% endif %}
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-apigw-logs"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.main.id
+  name        = "$default"
+  auto_deploy = true
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_gw.arn
+    format = jsonencode({
+      requestId        = "$context.requestId"
+      sourceIp         = "$context.identity.sourceIp"
+      httpMethod       = "$context.httpMethod"
+      routeKey         = "$context.routeKey"
+      status           = "$context.status"
+      responseLength   = "$context.responseLength"
+      integrationError = "$context.integrationErrorMessage"
+    })
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-api-stage"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+{% if 'lambda' in compute %}
+# Connection: api-gateway -> lambda
+# var.lambda_invoke_arn is set in root main.tf: lambda_invoke_arn = module.lambda.invoke_arn
+resource "aws_apigatewayv2_integration" "lambda" {
+  api_id                 = aws_apigatewayv2_api.main.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = var.lambda_invoke_arn
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "default" {
+  api_id    = aws_apigatewayv2_api.main.id
+  route_key = "ANY /{proxy+}"
+  {% if auth_required %}
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+  authorization_type = "JWT"
+  {% endif %}
+  target = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+# Allow API Gateway to invoke the Lambda function
+resource "aws_lambda_permission" "api_gateway" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = var.lambda_function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*"
+}
+{% endif %}
+
+{% if auth_required and 'cognito' in services %}
+# Cognito JWT authorizer — validates Bearer tokens from the Cognito user pool
+resource "aws_apigatewayv2_authorizer" "cognito" {
+  api_id           = aws_apigatewayv2_api.main.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "{{ project_name }}-${var.environment}-cognito-auth"
+
+  jwt_configuration {
+    # var.cognito_* are set in root main.tf from data.tf Cognito outputs
+    audience = [var.cognito_client_id]
+    issuer   = var.cognito_issuer_url
+  }
+}
+{% endif %}
+
+output "api_endpoint" {
+  description = "API Gateway v2 invoke URL"
+  value       = aws_apigatewayv2_stage.default.invoke_url
+}
+
+output "api_execution_arn" {
+  description = "API Gateway execution ARN (used for Lambda permission source_arn)"
+  value       = aws_apigatewayv2_api.main.execution_arn
+}

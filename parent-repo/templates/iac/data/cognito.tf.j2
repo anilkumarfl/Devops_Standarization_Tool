@@ -1,0 +1,108 @@
+# Cognito — user authentication and identity (aws provider ~> 6.0)
+resource "aws_cognito_user_pool" "main" {
+  name                     = "{{ project_name }}-${var.environment}-pool"
+  deletion_protection      = var.environment == "prod" ? "ACTIVE" : "INACTIVE"
+  username_attributes      = ["email"]
+  auto_verified_attributes = ["email"]
+
+  username_configuration {
+    case_sensitive = false
+  }
+
+  password_policy {
+    minimum_length                   = 12
+    require_uppercase                = true
+    require_lowercase                = true
+    require_numbers                  = true
+    require_symbols                  = true
+    password_history_size            = 5
+    temporary_password_validity_days = 7
+  }
+
+  # MFA — optional TOTP via authenticator app
+  mfa_configuration = "OPTIONAL"
+
+  software_token_mfa_configuration {
+    enabled = true
+  }
+
+  # Self-service account recovery via verified email
+  account_recovery_setting {
+    recovery_mechanism {
+      name     = "verified_email"
+      priority = 1
+    }
+  }
+
+  admin_create_user_config {
+    allow_admin_create_user_only = false
+  }
+
+  # Advanced security features (threat protection, adaptive auth)
+  user_pool_add_ons {
+    advanced_security_mode = var.environment == "prod" ? "ENFORCED" : "AUDIT"
+  }
+
+  verification_message_template {
+    default_email_option = "CONFIRM_WITH_CODE"
+    email_subject        = "Your {{ project_name }} verification code"
+    email_message        = "Your verification code is {####}"
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-pool"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+# App client — used by the frontend SPA or mobile app
+resource "aws_cognito_user_pool_client" "app" {
+  name         = "{{ project_name }}-${var.environment}-client"
+  user_pool_id = aws_cognito_user_pool.main.id
+
+  generate_secret = false   # public client (browser/mobile) — no secret
+
+  explicit_auth_flows = [
+    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH",
+    "ALLOW_USER_PASSWORD_AUTH",
+  ]
+
+  prevent_user_existence_errors = "ENABLED"
+
+  # Token validity
+  access_token_validity  = 60    # minutes
+  id_token_validity      = 60    # minutes
+  refresh_token_validity = 30    # days
+
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
+  }
+
+  # Supported identity providers
+  supported_identity_providers = ["COGNITO"]
+}
+
+# Hosted UI domain — provides a built-in login page
+resource "aws_cognito_user_pool_domain" "main" {
+  domain       = "{{ project_name }}-${var.environment}"
+  user_pool_id = aws_cognito_user_pool.main.id
+}
+
+output "cognito_user_pool_id" {
+  description = "Cognito User Pool ID"
+  value       = aws_cognito_user_pool.main.id
+}
+
+output "cognito_client_id" {
+  description = "Cognito App Client ID"
+  value       = aws_cognito_user_pool_client.app.id
+}
+
+output "cognito_issuer_url" {
+  description = "JWT issuer URL for API Gateway authorizer"
+  value       = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.main.id}"
+}

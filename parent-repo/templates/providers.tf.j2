@@ -1,0 +1,35 @@
+terraform {
+  required_version = ">= 1.9.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+
+  backend "s3" {
+    # bucket, key, region, and dynamodb_table passed via -backend-config in CI
+    key            = "{{ project }}/terraform.tfstate"
+    encrypt        = true
+    dynamodb_table = "terraform-locks"
+  }
+}
+
+provider "aws" {
+  region = "{{ region }}"
+
+  # ---------------------------------------------------------
+  # MANDATORY TAGS — applied at provider level so every
+  # resource inherits them automatically.
+  # Environment and CostCentre are injected per workspace
+  # via tfvars so they correctly reflect the target environment.
+  # ---------------------------------------------------------
+  default_tags {
+    tags = {
+      Project   = "{{ project }}"
+      Owner     = "{{ owner }}"
+      ManagedBy = "devops-scaffold-tool"
+    }
+  }
+}

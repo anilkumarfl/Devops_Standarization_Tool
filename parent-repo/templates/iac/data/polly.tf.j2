@@ -1,0 +1,17 @@
+# Amazon Polly — Text-to-Speech managed service
+# No Terraform resource needed: Polly is a managed API service.
+# IAM permissions are granted on the Lambda execution role (see iam.tf).
+#
+# Lambda calls Polly via the AWS SDK:
+#   polly_client.synthesize_speech(
+#       Text=text,
+#       OutputFormat="mp3",
+#       VoiceId="Joanna",
+#   )
+#
+# The resulting audio stream is typically saved to an S3 bucket
+# and a pre-signed URL is returned to the caller.
+#
+# Required Lambda env vars (set in compute.tf):
+#   POLLY_VOICE_ID  = "Joanna"          # or any Polly voice
+#   AUDIO_BUCKET    = "<s3-bucket-name>" # destination for MP3 files

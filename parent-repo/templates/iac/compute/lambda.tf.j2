@@ -1,0 +1,79 @@
+# Lambda — non-containerised / event-driven (aws provider ~> 6.0)
+resource "aws_lambda_function" "app" {
+  function_name = "{{ project_name }}-${var.environment}-func"
+  role          = var.lambda_exec_role_arn
+
+  # Deployment package — upload to S3 bucket first, then reference here
+  s3_bucket = var.lambda_s3_bucket
+  s3_key    = var.lambda_s3_key
+  handler   = "handler.main"
+  runtime   = "python3.13"          # Latest Python runtime as of provider 6.x
+
+  # Graviton2 — 20% cheaper and faster than x86_64 for most workloads
+  architectures = ["arm64"]
+
+  timeout     = var.lambda_timeout
+  memory_size = var.lambda_memory_size
+
+  # Configurable /tmp scratch space (512 MB – 10 240 MB)
+  ephemeral_storage {
+    size = 512
+  }
+
+  # Structured JSON logging + X-Ray active tracing
+  logging_config {
+    log_format            = "JSON"
+    application_log_level = "INFO"
+    system_log_level      = "WARN"
+    log_group             = aws_cloudwatch_log_group.lambda.name
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+{% if 'eks' in services %}
+      EKS_CLUSTER_NAME          = "{{ project_name }}-${var.environment}-eks"
+{% endif %}
+{% if 'secrets-manager' in services %}
+      SECRETS_MANAGER_SECRET_ARN = var.secrets_manager_arn
+{% endif %}
+{% if 'sns' in services %}
+      SNS_TOPIC_ARN             = var.sns_topic_arn
+{% endif %}
+{% if 'sqs' in services %}
+      SQS_QUEUE_URL             = var.sqs_queue_url
+{% endif %}
+{% if 'bedrock' in data_stores %}
+      BEDROCK_REGION = var.region
+{% endif %}
+{% if 'polly' in data_stores %}
+      POLLY_VOICE_ID = "Joanna"
+      AUDIO_BUCKET   = "{{ project_name }}-${var.environment}-audio"
+{% endif %}
+    }
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-func"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_cloudwatch_log_group" "lambda" {
+  name              = "/aws/lambda/{{ project_name }}-${var.environment}-func"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-lambda-logs"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}

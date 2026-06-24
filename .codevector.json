@@ -1,0 +1,12 @@
+{
+  "projectName": "devops_standardization",
+  "ticketPattern": "[A-Z]+-\\d+",
+  "gateway": "https://coding-gateway.fissionlabs.com",
+  "tools": [
+    {
+      "tool": "claude-code",
+      "scope": "local",
+      "modelSlug": "kimi-k-2-7-code"
+    }
+  ]
+}

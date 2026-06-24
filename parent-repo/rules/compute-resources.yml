@@ -1,0 +1,37 @@
+templates:
+  # Compute target templates — selected after compute_target is resolved by compute.yml.
+  # compute_target is injected into config by the generator before this file is evaluated.
+
+  - id: compute-ecs-fargate
+    when:
+      compute_target: ecs-fargate
+    template: iac/compute/ecs-fargate.tf.j2
+
+  - id: compute-lambda
+    when:
+      compute_target: lambda
+    template: iac/compute/lambda.tf.j2
+
+  - id: compute-eks
+    when:
+      compute_target: eks
+    template: iac/compute/eks.tf.j2
+
+  - id: compute-static-site
+    when:
+      compute_target: cloudfront-s3
+    template: iac/compute/static-site.tf.j2
+
+  # ALB: containerised web-api only
+  - id: compute-alb
+    when:
+      project.type: web-api
+      compute_target: [ecs-fargate, eks]
+    template: iac/compute/alb.tf.j2
+
+  # API Gateway: serverless web-api only
+  - id: compute-api-gateway
+    when:
+      project.type: web-api
+      compute_target: lambda
+    template: iac/compute/api-gateway.tf.j2

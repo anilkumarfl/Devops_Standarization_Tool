@@ -1,0 +1,23 @@
+templates:
+  # IAM templates — one per compute target.
+  # EKS needs both ecs.tf.j2 (for task roles) and eks.tf.j2 (cluster + node roles).
+
+  - id: iam-ecs
+    when:
+      compute_target: ecs-fargate
+    template: iac/iam/ecs.tf.j2
+
+  - id: iam-eks-task
+    when:
+      compute_target: eks
+    template: iac/iam/ecs.tf.j2
+
+  - id: iam-eks-cluster
+    when:
+      compute_target: eks
+    template: iac/iam/eks.tf.j2
+
+  - id: iam-lambda
+    when:
+      compute_target: lambda
+    template: iac/iam/lambda.tf.j2

@@ -1,0 +1,132 @@
+# ECS Fargate — containerised workload (aws provider ~> 6.0)
+resource "aws_ecs_cluster" "main" {
+  name = "{{ project_name }}-${var.environment}-ecs"
+
+  # Enhanced Container Insights (replaces basic "enabled") — includes storage and network metrics
+  setting {
+    name  = "containerInsights"
+    value = "enhanced"
+  }
+
+  configuration {
+    execute_command_configuration {
+      logging = "OVERRIDE"
+      log_configuration {
+        cloud_watch_encryption_enabled = true
+        cloud_watch_log_group_name     = aws_cloudwatch_log_group.ecs_exec.name
+      }
+    }
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-ecs"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_cloudwatch_log_group" "ecs_exec" {
+  name              = "/ecs/exec/{{ project_name }}-${var.environment}"
+  retention_in_days = lookup(local.log_retention_days, var.environment, 30)
+  kms_key_id        = try(aws_kms_key.main.arn, null)
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-ecs-exec-logs"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_ecs_task_definition" "app" {
+  family                   = "{{ project_name }}-${var.environment}-task"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
+
+  # ARM64 / Graviton2 — 20% cheaper, set to X86_64 if your image is amd64-only
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
+  container_definitions = jsonencode([{
+    name      = "{{ project_name }}"
+    image     = "PLACEHOLDER_IMAGE"   # replace with ECR URI in CI/CD
+    essential = true
+    portMappings = [{
+      containerPort = 8080
+      protocol      = "tcp"
+      name          = "app"
+    }]
+    environment = [
+      { name = "ENVIRONMENT", value = var.environment }
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = "/ecs/{{ project_name }}-${var.environment}"
+        "awslogs-region"        = var.region
+        "awslogs-stream-prefix" = "ecs"
+        "awslogs-create-group"  = "true"
+      }
+    }
+    healthCheck = {
+      command     = ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 60
+    }
+  }])
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-task"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_ecs_service" "app" {
+  name                               = "{{ project_name }}-${var.environment}-svc"
+  cluster                            = aws_ecs_cluster.main.id
+  task_definition                    = aws_ecs_task_definition.app.arn
+  desired_count                      = var.environment == "prod" ? 2 : 1
+  launch_type                        = "FARGATE"
+  health_check_grace_period_seconds  = 60
+
+  # Enable ECS Exec for remote debugging
+  enable_execute_command = var.environment != "prod"
+
+  network_configuration {
+    subnets          = aws_subnet.private[*].id
+    security_groups  = [aws_security_group.app.id]
+    assign_public_ip = false
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  deployment_controller {
+    type = "ECS"
+  }
+{% if 'alb' in services %}
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app.arn
+    container_name   = "{{ project_name }}"
+    container_port   = 8080
+  }
+{% endif %}
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-svc"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+
+  depends_on = [aws_iam_role.ecs_execution]
+}

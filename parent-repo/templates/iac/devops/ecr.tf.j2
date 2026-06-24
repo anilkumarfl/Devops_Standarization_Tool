@@ -1,0 +1,89 @@
+# ECR — Container Image Registry (aws provider ~> 6.0)
+# Private registry; EKS pulls images on pod startup.
+# Uses terraform-aws-modules/ecr/aws for lifecycle policies and cross-account access.
+
+resource "aws_ecr_repository" "app" {
+  name                 = "{{ project_name }}-${var.environment}-app"
+  image_tag_mutability = "IMMUTABLE"   # enforce semver tags; no overwriting :latest
+
+  image_scanning_configuration {
+    scan_on_push = true    # automatic vulnerability scan on every push
+  }
+
+  encryption_configuration {
+    encryption_type = "KMS"
+    # Omit kms_key to use the AWS-managed ECR key, or reference your CMK:
+    # kms_key = aws_kms_key.main.arn
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-ecr"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+# Lifecycle policy — keep last 30 tagged images, expire untagged after 1 day
+resource "aws_ecr_lifecycle_policy" "app" {
+  repository = aws_ecr_repository.app.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Expire untagged images after 1 day"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 1
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep last 30 tagged images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["v"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 30
+        }
+        action = { type = "expire" }
+      }
+    ]
+  })
+}
+
+# Repository policy — allow EKS node role to pull images
+resource "aws_ecr_repository_policy" "app" {
+  repository = aws_ecr_repository.app.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowEKSNodePull"
+        Effect = "Allow"
+        Principal = {
+          AWS = aws_iam_role.eks_node.arn
+        }
+        Action = [
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:BatchCheckLayerAvailability"
+        ]
+      }
+    ]
+  })
+}
+
+output "ecr_repository_url" {
+  description = "Full ECR repository URL (use in docker push and EKS pod spec)"
+  value       = aws_ecr_repository.app.repository_url
+}
+
+output "ecr_repository_arn" {
+  description = "ECR repository ARN"
+  value       = aws_ecr_repository.app.arn
+}

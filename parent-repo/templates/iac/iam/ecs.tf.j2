@@ -1,0 +1,74 @@
+# IAM — least privilege, one role per service, no wildcards (Section 5.2)
+resource "aws_iam_role" "ecs_execution" {
+  name = "{{ project_name }}-${var.environment}-ecs-exec-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-ecs-exec-role"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_execution" {
+  role       = aws_iam_role.ecs_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role" "ecs_task" {
+  name = "{{ project_name }}-${var.environment}-ecs-task-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-ecs-task-role"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+# Explicit deny on sensitive actions (Section 5.2)
+resource "aws_iam_role_policy" "ecs_task_deny_sensitive" {
+  name = "deny-sensitive"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Deny"
+      Action   = ["iam:*", "organizations:*", "account:*"]
+      Resource = "*"
+    }]
+  })
+}
+{% if data_stores and (data_stores | select('in', ['postgres', 'mysql', 'redis']) | list) %}
+# Allow ECS task to fetch credentials from Secrets Manager at runtime (Section 5.4)
+resource "aws_iam_role_policy" "ecs_task_secrets" {
+  name = "secrets-manager-read"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = "arn:aws:secretsmanager:*:*:secret:/{{ project_name }}/*"
+    }]
+  })
+}
+{% endif %}

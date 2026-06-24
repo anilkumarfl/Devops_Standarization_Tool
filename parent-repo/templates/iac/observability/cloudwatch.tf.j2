@@ -1,0 +1,191 @@
+# CloudWatch — Monitoring & Logging (aws provider ~> 6.0)
+# Centralised log groups, alarms, and a dashboard for the whole stack.
+
+# ── Central app log group ────────────────────────────────────────────────────
+
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/app/{{ project_name }}/${var.environment}"
+  retention_in_days = lookup(local.log_retention_days, var.environment, 30)
+
+  {% if 'kms' in services %}
+  kms_key_id = aws_kms_key.main.arn
+  {% endif %}
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-app-logs"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
+
+# ── Alarms ───────────────────────────────────────────────────────────────────
+
+{% if 'lambda' in compute %}
+resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  alarm_name          = "{{ project_name }}-${var.environment}-lambda-errors"
+  alarm_description   = "Lambda error rate > 5 in 5 minutes"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 5
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = "{{ project_name }}-${var.environment}-func"
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-lambda-error-alarm"
+    Environment = var.environment
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_duration" {
+  alarm_name          = "{{ project_name }}-${var.environment}-lambda-duration"
+  alarm_description   = "Lambda p99 duration approaching timeout"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 3
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  extended_statistic  = "p99"
+  threshold           = var.lambda_timeout * 800   # 80% of timeout in ms
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = "{{ project_name }}-${var.environment}-func"
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-lambda-duration-alarm"
+    Environment = var.environment
+  }
+}
+{% endif %}
+
+{% if 'eks' in compute %}
+resource "aws_cloudwatch_metric_alarm" "eks_cpu" {
+  alarm_name          = "{{ project_name }}-${var.environment}-eks-cpu"
+  alarm_description   = "EKS node CPU > 80% for 10 minutes"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "node_cpu_utilization"
+  namespace           = "ContainerInsights"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 80
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    ClusterName = "{{ project_name }}-${var.environment}-eks"
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-eks-cpu-alarm"
+    Environment = var.environment
+  }
+}
+{% endif %}
+
+{% if 'api-gateway' in services %}
+resource "aws_cloudwatch_metric_alarm" "api_gw_5xx" {
+  alarm_name          = "{{ project_name }}-${var.environment}-apigw-5xx"
+  alarm_description   = "API Gateway 5xx errors > 10 in 5 minutes"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "5XXError"
+  namespace           = "AWS/ApiGateway"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 10
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    ApiId = "{{ project_name }}-${var.environment}-api"
+  }
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-apigw-5xx-alarm"
+    Environment = var.environment
+  }
+}
+{% endif %}
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+resource "aws_cloudwatch_dashboard" "main" {
+  dashboard_name = "{{ project_name }}-${var.environment}"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {% if 'lambda' in compute %}
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          title  = "Lambda -- Invocations & Errors"
+          period = 300
+          stat   = "Sum"
+          metrics = [
+            ["AWS/Lambda", "Invocations", "FunctionName", "{{ project_name }}-${var.environment}-func"],
+            ["AWS/Lambda", "Errors",      "FunctionName", "{{ project_name }}-${var.environment}-func"]
+          ]
+        }
+      },
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          title  = "Lambda -- Duration (p50 / p99)"
+          period = 60
+          metrics = [
+            ["AWS/Lambda", "Duration", "FunctionName", "{{ project_name }}-${var.environment}-func", { stat = "p50" }],
+            ["AWS/Lambda", "Duration", "FunctionName", "{{ project_name }}-${var.environment}-func", { stat = "p99" }]
+          ]
+        }
+      },
+      {% endif %}
+      {% if 'eks' in compute %}
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          title  = "EKS -- Node CPU & Memory"
+          period = 300
+          stat   = "Average"
+          metrics = [
+            ["ContainerInsights", "node_cpu_utilization",    "ClusterName", "{{ project_name }}-${var.environment}-eks"],
+            ["ContainerInsights", "node_memory_utilization", "ClusterName", "{{ project_name }}-${var.environment}-eks"]
+          ]
+        }
+      },
+      {% endif %}
+      {% if 'api-gateway' in services %}
+      {
+        type   = "metric"
+        width  = 12
+        height = 6
+        properties = {
+          title  = "API Gateway -- Latency & 5xx Errors"
+          period = 60
+          metrics = [
+            ["AWS/ApiGateway", "Latency",  "ApiId", "{{ project_name }}-${var.environment}-api", { stat = "p99" }],
+            ["AWS/ApiGateway", "5XXError", "ApiId", "{{ project_name }}-${var.environment}-api", { stat = "Sum"  }]
+          ]
+        }
+      }
+      {% endif %}
+    ]
+  })
+}
+
+output "cloudwatch_dashboard_url" {
+  description = "CloudWatch dashboard URL"
+  value       = "https://${var.region}.console.aws.amazon.com/cloudwatch/home?region=${var.region}#dashboards:name={{ project_name }}-${var.environment}"
+}

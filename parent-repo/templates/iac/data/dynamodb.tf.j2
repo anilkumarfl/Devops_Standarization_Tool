@@ -1,0 +1,65 @@
+# DynamoDB — serverless NoSQL table (aws provider ~> 6.0)
+resource "aws_dynamodb_table" "main" {
+  name         = "{{ project_name }}-${var.environment}-ddb"
+  billing_mode = var.dynamodb_billing_mode  # PAY_PER_REQUEST or PROVISIONED (set in tfvars)
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  # Required attributes — only key attributes need to be declared here.
+  # Additional attributes are schemaless and defined by your application.
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "sk"
+    type = "S"
+  }
+
+  # GSI — enables querying by entity type + timestamp (adjust to your access patterns)
+  attribute {
+    name = "gsi1pk"
+    type = "S"
+  }
+
+  attribute {
+    name = "gsi1sk"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name               = "gsi1"
+    hash_key           = "gsi1pk"
+    range_key          = "gsi1sk"
+    projection_type    = "ALL"
+  }
+
+  # TTL — auto-expire records via application-set epoch timestamp
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  # PITR — 35-day rolling backup window, no extra cost on PAY_PER_REQUEST
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  # Server-side encryption with CMK when KMS is in the stack
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = try(aws_kms_key.main.arn, null)
+  }
+
+  # Prevent accidental table deletion
+  deletion_protection_enabled = var.environment == "prod" ? true : false
+
+  table_class = "STANDARD"
+
+  tags = {
+    Name        = "{{ project_name }}-${var.environment}-ddb"
+    Environment = var.environment
+    CostCentre  = var.cost_centre
+  }
+}
