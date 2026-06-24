@@ -5,7 +5,7 @@ A conversational CLI that generates production-ready Terraform IaC and GitHub Ac
 
 ---
 
-## What's New in v2
+### What's New in v2
 
 | Area | v1 | v2 |
 |---|---|---|
